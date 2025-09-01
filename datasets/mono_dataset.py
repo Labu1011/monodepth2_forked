@@ -54,7 +54,12 @@ class MonoDataset(data.Dataset):
         self.height = height
         self.width = width
         self.num_scales = num_scales
-        self.interp = Image.ANTIALIAS
+
+        # Use LANCZOS for Pillow >=10, fallback for older versions
+        try:
+            self.interp = Image.Resampling.LANCZOS
+        except AttributeError:
+            self.interp = Image.LANCZOS
 
         self.frame_idxs = frame_idxs
 
