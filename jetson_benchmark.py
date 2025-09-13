@@ -375,6 +375,7 @@ def run_inference(
         
         # Print detailed debug info about inputs and outputs
         print(f"\nModel {model_type} - Encoder/Decoder Interface:")
+            # ...existing code...
         print(f"  Encoder outputs: {encoder_output_names}")
         print(f"  Decoder inputs: {decoder_input_names}")
         
