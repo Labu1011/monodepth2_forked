@@ -129,75 +129,6 @@ def parse_args():
     return parser.parse_args()
 
 # JetsonMonitor class definition moved outside of parse_args
-class JetsonMonitor:
-    def __init__(self):
-        self.available = JTOP_AVAILABLE
-        self.jetson = None
-        self.stats = []
-
-    def start(self):
-        """Start monitoring."""
-        if not self.available:
-            return False
-        try:
-            self.jetson = jtop.jtop()
-            self.jetson.start()
-            self.stats = []
-            return True
-        except Exception as e:
-            print(f"Error starting Jetson monitoring: {e}")
-            self.available = False
-            return False
-
-    def sample(self):
-        """Sample current hardware stats."""
-        if not self.available or self.jetson is None:
-            return
-        try:
-            if self.jetson.ok():
-                stats = {
-                    'timestamp': time.time(),
-                    'gpu': self.jetson.gpu.get('gpu', 0),  # GPU utilization %
-                    'gpu_freq': self.jetson.gpu.get('freq', 0),  # GPU frequency
-                    'ram_used': self.jetson.memory.get('used', 0),  # RAM used (MB)
-                    'ram_total': self.jetson.memory.get('total', 0),  # Total RAM (MB)
-                    'temp': {
-                        'gpu': self.jetson.temperature.get('GPU', 0),  # GPU temp
-                        'cpu': self.jetson.temperature.get('CPU', 0),  # CPU temp
-                    },
-                    'power': self.jetson.power.get('tot', 0),  # Total power (mW)
-                }
-                self.stats.append(stats)
-        except Exception as e:
-            print(f"Error sampling Jetson stats: {e}")
-
-    def stop(self):
-        """Stop monitoring and return stats."""
-        if not self.available or self.jetson is None:
-            return {}
-        try:
-            self.jetson.close()
-            if len(self.stats) == 0:
-                return {}
-            # Only average numeric values, skip missing/malformed
-            def safe_mean(values):
-                vals = [v for v in values if isinstance(v, (int, float))]
-                return np.mean(vals) if vals else float('nan')
-
-            avg_stats = {
-                'gpu_util': safe_mean([s.get('gpu', 0) for s in self.stats]),
-                'gpu_freq': safe_mean([s.get('gpu_freq', 0) for s in self.stats]),
-                'ram_used': safe_mean([s.get('ram_used', 0) for s in self.stats]),
-                'ram_total': self.stats[0].get('ram_total', 0) if 'ram_total' in self.stats[0] else 0,
-                'gpu_temp': safe_mean([s.get('temp', {}).get('gpu', 0) for s in self.stats]),
-                'cpu_temp': safe_mean([s.get('temp', {}).get('cpu', 0) for s in self.stats]),
-                'power_mw': safe_mean([s.get('power', 0) for s in self.stats]),
-                'samples': len(self.stats),
-            }
-            return avg_stats
-        except Exception as e:
-            print(f"Error stopping Jetson monitoring: {e}")
-            return {}
 
 
 def get_onnx_model_info(model_path: str, debug: bool = False) -> Dict[str, Any]:
@@ -409,9 +340,6 @@ def run_inference(
             if not found:
                 print(f"  Warning: No encoder output matches shape for decoder input {decoder_input_name} (expected {expected_shape})")
         
-        # Start Jetson monitoring
-        jetson_monitor = JetsonMonitor()
-        jetson_monitor.start()
         
         # Warmup
         print(f"Running {num_warmup} warmup iterations...")
@@ -440,8 +368,8 @@ def run_inference(
         print(f"Running {num_iter} benchmark iterations...")
         latencies = []
         
+        latencies = []
         for i in range(num_iter):
-            jetson_monitor.sample()
             start_time = time.time()
             try:
                 encoder_outputs = encoder_session.run(encoder_output_names, {encoder_input_name: model_input_tensor})
@@ -466,22 +394,14 @@ def run_inference(
             except Exception as e:
                 print(f"  Error during benchmark iteration {i+1}: {e}")
                 continue
-        
-        # Get Jetson hardware stats
-        hw_stats = jetson_monitor.stop()
-        
-        # Calculate metrics
         avg_latency = np.mean(latencies)
         std_latency = np.std(latencies)
         min_latency = np.min(latencies)
         max_latency = np.max(latencies)
         fps = 1000 / avg_latency
-        
-        # Get model sizes
         encoder_size = models[encoder_key]["info"]["size_mb"]
         decoder_size = models[decoder_key]["info"]["size_mb"]
         total_size = encoder_size + decoder_size
-        
         results[model_type] = {
             "avg_latency_ms": float(avg_latency),
             "std_latency_ms": float(std_latency),
@@ -493,126 +413,64 @@ def run_inference(
             "decoder_size_mb": float(decoder_size),
             "num_iterations": num_iter,
             "providers": models[encoder_key]["providers"],
-            "jetson_stats": hw_stats,
             "timestamp": datetime.now().isoformat(),
         }
-        
-        # Print summary
         print(f"\n{model_type.capitalize()} Model Results:")
         print(f"  Average Latency: {avg_latency:.2f} ms (±{std_latency:.2f})")
         print(f"  FPS: {fps:.2f}")
         print(f"  Model Size: {total_size:.2f} MB (Encoder: {encoder_size:.2f} MB, Decoder: {decoder_size:.2f} MB)")
-        
-        if hw_stats:
-            print(f"  GPU Utilization: {hw_stats['gpu_util']:.1f}%")
-            print(f"  RAM Usage: {hw_stats['ram_used']:.1f} MB / {hw_stats['ram_total']:.1f} MB")
-            print(f"  Power Consumption: {hw_stats['power_mw']:.1f} mW")
-            print(f"  Temperature - GPU: {hw_stats['gpu_temp']:.1f}°C, CPU: {hw_stats['cpu_temp']:.1f}°C")
-    
-    return results
 
-
-def write_results(results: Dict[str, Dict[str, Any]], output_dir: str) -> Dict[str, str]:
-    """Write benchmark results to files."""
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_paths = {}
-    
-    # JSON output (all details)
-    json_path = output_path / f"benchmark_results_{timestamp}.json"
-    with open(json_path, 'w') as f:
-        json.dump(results, f, indent=2)
-    file_paths["json"] = str(json_path)
-    
-    # CSV output (main metrics)
-    csv_path = output_path / f"benchmark_results_{timestamp}.csv"
-    fieldnames = [
-        "model_type", "avg_latency_ms", "std_latency_ms", "min_latency_ms", "max_latency_ms", 
-        "fps", "model_size_mb", "encoder_size_mb", "decoder_size_mb",
-    ]
-    
-    # Add Jetson stats fields if available
-    jetson_fields = []
-    for model_type, model_results in results.items():
-        if "jetson_stats" in model_results and model_results["jetson_stats"]:
-            jetson_fields = list(model_results["jetson_stats"].keys())
-            break
-    
-    if jetson_fields:
-        fieldnames.extend([f"jetson_{field}" for field in jetson_fields])
-    
-    with open(csv_path, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        
-        for model_type, model_results in results.items():
-            row = {
-                "model_type": model_type,
-                "avg_latency_ms": model_results["avg_latency_ms"],
-                "std_latency_ms": model_results["std_latency_ms"],
-                "min_latency_ms": model_results["min_latency_ms"],
-                "max_latency_ms": model_results["max_latency_ms"],
-                "fps": model_results["fps"],
-                "model_size_mb": model_results["model_size_mb"],
-                "encoder_size_mb": model_results["encoder_size_mb"],
-                "decoder_size_mb": model_results["decoder_size_mb"],
-            }
-            
-            # Add Jetson stats if available
-            if "jetson_stats" in model_results and model_results["jetson_stats"]:
-                for field in jetson_fields:
-                    row[f"jetson_{field}"] = model_results["jetson_stats"].get(field, "")
-            
-            writer.writerow(row)
-    
-    file_paths["csv"] = str(csv_path)
-    
-    # Markdown summary
-    md_path = output_path / f"benchmark_results_{timestamp}.md"
-    with open(md_path, 'w') as f:
-        f.write("# Monodepth2 ONNX Model Benchmark Results\n\n")
-        f.write(f"Benchmark run on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        
-        f.write("## Model Performance Comparison\n\n")
-        f.write("| Model Type | FPS | Latency (ms) | Model Size (MB) |\n")
-        f.write("|------------|-----|--------------|----------------|\n")
-        
-        for model_type, model_results in results.items():
-            f.write(
-                f"| {model_type.capitalize()} | "
-                f"{model_results['fps']:.2f} | "
-                f"{model_results['avg_latency_ms']:.2f} ± {model_results['std_latency_ms']:.2f} | "
-                f"{model_results['model_size_mb']:.2f} |\n"
-            )
-        
-        f.write("\n## Jetson Hardware Metrics\n\n")
-        
-        has_jetson_stats = any("jetson_stats" in model_results and model_results["jetson_stats"] 
-                               for model_results in results.values())
-        
-        if has_jetson_stats:
-            f.write("| Model Type | GPU Utilization (%) | RAM Usage (MB) | Power (mW) | GPU Temp (°C) | CPU Temp (°C) |\n")
-            f.write("|------------|---------------------|----------------|------------|---------------|---------------|\n")
-            
+def write_results(results, output_dir):
+        """Write results to CSV and Markdown."""
+        from pathlib import Path
+        import csv
+        from datetime import datetime
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_path = output_path / f"benchmark_results_{timestamp}.csv"
+        fieldnames = [
+            "model_type", "avg_latency_ms", "std_latency_ms", "min_latency_ms", "max_latency_ms", "fps",
+            "model_size_mb", "encoder_size_mb", "decoder_size_mb", "num_iterations", "providers", "timestamp"
+        ]
+        file_paths = {}
+        with open(csv_path, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
             for model_type, model_results in results.items():
-                if "jetson_stats" in model_results and model_results["jetson_stats"]:
-                    stats = model_results["jetson_stats"]
-                    f.write(
-                        f"| {model_type.capitalize()} | "
-                        f"{stats.get('gpu_util', 'N/A'):.1f} | "
-                        f"{stats.get('ram_used', 'N/A'):.1f} | "
-                        f"{stats.get('power_mw', 'N/A'):.1f} | "
-                        f"{stats.get('gpu_temp', 'N/A'):.1f} | "
-                        f"{stats.get('cpu_temp', 'N/A'):.1f} |\n"
-                    )
-        else:
-            f.write("No Jetson hardware metrics available.\n")
-    
-    file_paths["md"] = str(md_path)
-    
-    return file_paths
+                row = {
+                    "model_type": model_type,
+                    "avg_latency_ms": model_results["avg_latency_ms"],
+                    "std_latency_ms": model_results["std_latency_ms"],
+                    "min_latency_ms": model_results["min_latency_ms"],
+                    "max_latency_ms": model_results["max_latency_ms"],
+                    "fps": model_results["fps"],
+                    "model_size_mb": model_results["model_size_mb"],
+                    "encoder_size_mb": model_results["encoder_size_mb"],
+                    "decoder_size_mb": model_results["decoder_size_mb"],
+                    "num_iterations": model_results["num_iterations"],
+                    "providers": model_results["providers"],
+                    "timestamp": model_results["timestamp"],
+                }
+                writer.writerow(row)
+        file_paths["csv"] = str(csv_path)
+        # Markdown summary
+        md_path = output_path / f"benchmark_results_{timestamp}.md"
+        with open(md_path, 'w') as f:
+            f.write("# Monodepth2 ONNX Model Benchmark Results\n\n")
+            f.write(f"Benchmark run on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write("## Model Performance Comparison\n\n")
+            f.write("| Model Type | FPS | Latency (ms) | Model Size (MB) |\n")
+            f.write("|------------|-----|--------------|----------------|\n")
+            for model_type, model_results in results.items():
+                f.write(
+                    f"| {model_type.capitalize()} | "
+                    f"{model_results['fps']:.2f} | "
+                    f"{model_results['avg_latency_ms']:.2f} ± {model_results['std_latency_ms']:.2f} | "
+                    f"{model_results['model_size_mb']:.2f} |\n"
+                )
+        file_paths["md"] = str(md_path)
+        return file_paths
 
 
 def plot_results(results: Dict[str, Dict[str, Any]], output_dir: str) -> Dict[str, str]:
