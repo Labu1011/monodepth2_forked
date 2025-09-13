@@ -119,18 +119,8 @@ def parse_args():
     
     parser.add_argument(
         "--use_cuda", 
-        action="store_true",
-        help="Use CUDA execution provider if available"
+        action="store_true"
     )
-    
-    parser.add_argument(
-        "--debug", 
-        action="store_true",
-        help="Enable debug output for model compatibility"
-    )
-    
-    return parser.parse_args()
-
 
 class JetsonMonitor:
     def __init__(self):
@@ -173,8 +163,7 @@ class JetsonMonitor:
                 self.stats.append(stats)
         except Exception as e:
             print(f"Error sampling Jetson stats: {e}")
-    """Monitor Jetson Nano TX2 hardware metrics."""
-    
+
     def stop(self):
         """Stop monitoring and return stats."""
         if not self.available or self.jetson is None:
@@ -202,38 +191,6 @@ class JetsonMonitor:
         except Exception as e:
             print(f"Error stopping Jetson monitoring: {e}")
             return {}
-            return
-        
-        try:
-            if self.jetson.ok():
-                stats = {
-                    'timestamp': time.time(),
-                    'gpu': self.jetson.gpu.get('gpu', 0),  # GPU utilization %
-                    'gpu_freq': self.jetson.gpu.get('freq', 0),  # GPU frequency
-                    'ram_used': self.jetson.memory.get('used', 0),  # RAM used (MB)
-                    'ram_total': self.jetson.memory.get('total', 0),  # Total RAM (MB)
-                    'temp': {
-                        'gpu': self.jetson.temperature.get('GPU', 0),  # GPU temp
-                        'cpu': self.jetson.temperature.get('CPU', 0),  # CPU temp
-                    },
-                    'power': self.jetson.power.get('tot', 0),  # Total power (mW)
-                }
-                self.stats.append(stats)
-        except Exception as e:
-            print(f"Error sampling Jetson stats: {e}")
-    
-    def stop(self):
-        """Stop monitoring and return stats."""
-        if not self.available or self.jetson is None:
-            return {}
-        
-        try:
-            self.jetson.close()
-            
-            # Calculate average values
-            if len(self.stats) == 0:
-                return {}
-            
             avg_stats = {
                 'gpu_util': np.mean([s['gpu'] for s in self.stats]),
                 'gpu_freq': np.mean([s['gpu_freq'] for s in self.stats]),
