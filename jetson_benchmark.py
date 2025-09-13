@@ -681,39 +681,30 @@ def plot_results(results: Dict[str, Dict[str, Any]], output_dir: str) -> Dict[st
     plt.close(fig)
     plot_paths["performance"] = str(perf_plot_path)
     
-    # 2. Model size comparison
+    # 2. Jetson RAM usage comparison
     fig, ax = plt.subplots(figsize=(10, 6))
-    
-    model_sizes = [results[model_type]["model_size_mb"] for model_type in model_types]
-    encoder_sizes = [results[model_type]["encoder_size_mb"] for model_type in model_types]
-    decoder_sizes = [results[model_type]["decoder_size_mb"] for model_type in model_types]
-    
+    ram_used = []
+    for model_type in model_types:
+        stats = results[model_type].get("jetson_stats", {})
+        ram_used.append(stats.get("ram_used", float('nan')))
     x = np.arange(len(model_types))
     width = 0.35
-    
-    ax.bar(x, encoder_sizes, width, label='Encoder', color='tab:blue', alpha=0.7)
-    ax.bar(x, decoder_sizes, width, bottom=encoder_sizes, label='Decoder', color='tab:orange', alpha=0.7)
-    
-    ax.set_ylabel('Model Size (MB)')
-    ax.set_title('Model Size Comparison')
+    ax.bar(x, ram_used, width, color=['tab:blue', 'tab:orange'])
+    ax.set_ylabel('RAM Usage (MB)')
+    ax.set_title('Jetson RAM Usage Comparison')
     ax.set_xticks(x)
     ax.set_xticklabels([t.capitalize() for t in model_types])
-    ax.legend()
     ax.grid(True, alpha=0.3)
-    
-    # Add percentage improvement in total size
-    if len(model_types) == 2:
-        size_change = ((results[model_types[0]]["model_size_mb"] - results[model_types[1]]["model_size_mb"]) / 
-                         results[model_types[0]]["model_size_mb"] * 100)
-        change_label = f"{size_change:.1f}% size reduction"
+    if len(model_types) == 2 and all(not np.isnan(val) for val in ram_used):
+        ram_change = ((ram_used[1] - ram_used[0]) / ram_used[0] * 100) if ram_used[0] else 0
+        change_label = f"{ram_change:+.1f}% RAM change"
         ax.text(0.5, 0.9, change_label, transform=ax.transAxes, ha='center',
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.7))
-    
-    size_plot_path = output_path / f"model_size_comparison_{timestamp}.png"
+    ram_plot_path = output_path / f"jetson_ram_comparison_{timestamp}.png"
     fig.tight_layout()
-    fig.savefig(size_plot_path, dpi=150)
+    fig.savefig(ram_plot_path, dpi=150)
     plt.close(fig)
-    plot_paths["size"] = str(size_plot_path)
+    plot_paths["ram"] = str(ram_plot_path)
     
     # 3. Jetson hardware metrics comparison (if available)
     has_jetson_stats = all("jetson_stats" in model_results and model_results["jetson_stats"] 
@@ -752,41 +743,40 @@ def plot_results(results: Dict[str, Dict[str, Any]], output_dir: str) -> Dict[st
     
     # 4. Combined summary plot
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
-    
     # FPS
     ax1.bar(model_types, fps_values, color=['tab:blue', 'tab:orange'])
     ax1.set_title('FPS')
     ax1.set_ylabel('Frames Per Second')
     ax1.grid(True, alpha=0.3)
-    
     # Latency
     ax2.bar(model_types, latency_values, yerr=latency_std, color=['tab:blue', 'tab:orange'])
     ax2.set_title('Latency (ms)')
     ax2.set_ylabel('Milliseconds')
     ax2.grid(True, alpha=0.3)
-    
-    # Model Size
-    ax3.bar(model_types, model_sizes, color=['tab:blue', 'tab:orange'])
-    ax3.set_title('Model Size (MB)')
+    # Jetson RAM Usage
+    ax3.bar(model_types, ram_used, color=['tab:blue', 'tab:orange'])
+    ax3.set_title('Jetson RAM Usage (MB)')
     ax3.set_ylabel('Megabytes')
     ax3.grid(True, alpha=0.3)
-    
-    # Either GPU utilization or RAM usage
+    # GPU Utilization
     if has_jetson_stats:
-        gpu_util = [results[model_type]["jetson_stats"]["gpu_util"] for model_type in model_types]
-        ax4.bar(model_types, gpu_util, color=['tab:blue', 'tab:orange'])
-        ax4.set_title('GPU Utilization (%)')
-        ax4.set_ylabel('Percentage')
+        gpu_util = [results[model_type]["jetson_stats"].get("gpu_util", float('nan')) for model_type in model_types]
+        if all(not np.isnan(val) for val in gpu_util):
+            ax4.bar(model_types, gpu_util, color=['tab:blue', 'tab:orange'])
+            ax4.set_title('GPU Utilization (%)')
+            ax4.set_ylabel('Percentage')
+        else:
+            ax4.text(0.5, 0.5, 'Jetson GPU stats not available', 
+                     ha='center', va='center', transform=ax4.transAxes)
+            ax4.set_title('GPU Utilization')
     else:
         ax4.text(0.5, 0.5, 'Jetson stats not available', 
                  ha='center', va='center', transform=ax4.transAxes)
         ax4.set_title('GPU Utilization')
     ax4.grid(True, alpha=0.3)
-    
     fig.suptitle('Monodepth2 ONNX Models Benchmark Summary', fontsize=16)
     fig.tight_layout()
     fig.subplots_adjust(top=0.94)
-    
     summary_plot_path = output_path / f"benchmark_summary_{timestamp}.png"
     fig.savefig(summary_plot_path, dpi=150)
     plt.close(fig)
