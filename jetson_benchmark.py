@@ -121,7 +121,9 @@ def parse_args():
         "--use_cuda", 
         action="store_true"
     )
+    return parser.parse_args()
 
+# JetsonMonitor class definition moved outside of parse_args
 class JetsonMonitor:
     def __init__(self):
         self.available = JTOP_AVAILABLE
