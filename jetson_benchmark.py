@@ -373,17 +373,67 @@ def run_inference(
         decoder_input_names = [inp.name for inp in decoder_session.get_inputs()]
         decoder_output_names = [output.name for output in decoder_session.get_outputs()]
         
+        # Print detailed debug info about inputs and outputs
+        print(f"\nModel {model_type} - Encoder/Decoder Interface:")
+        print(f"  Encoder outputs: {encoder_output_names}")
+        print(f"  Decoder inputs: {decoder_input_names}")
+        
+        # Check encoder outputs and decoder inputs for compatibility
+        print("\nAnalyzing model compatibility:")
+        
+        # Get shapes
+        encoder_output_shapes = {out.name: out.shape for out in encoder_session.get_outputs()}
+        decoder_input_shapes = {inp.name: inp.shape for inp in decoder_session.get_inputs()}
+        
+        print(f"  Encoder output shapes: {encoder_output_shapes}")
+        print(f"  Decoder input shapes: {decoder_input_shapes}")
+        
+        # Try a test run to see the actual output
+        print("\nRunning test inference to check actual output shapes...")
+        test_input = input_tensor.copy()
+        test_encoder_outputs = encoder_session.run(encoder_output_names, {encoder_input_name: test_input})
+        
+        print("  Actual encoder outputs:")
+        for i, (name, output) in enumerate(zip(encoder_output_names, test_encoder_outputs)):
+            print(f"    Output {i}: {name}, shape={output.shape}, dtype={output.dtype}")
+        
+        # Create a direct ordered mapping regardless of names
+        # This attempts to map first encoder output to first decoder input, etc.
+        print("\nCreating direct mapping from encoder outputs to decoder inputs...")
+        decoder_inputs = {}
+        
+        # Match by position
+        if len(encoder_output_names) > 0 and len(decoder_input_names) > 0:
+            for i, (decoder_name, encoder_output) in enumerate(zip(decoder_input_names, test_encoder_outputs)):
+                if i < len(test_encoder_outputs):
+                    decoder_inputs[decoder_name] = encoder_output
+                    print(f"  Mapped decoder input {decoder_name} <- encoder output {i} (shape={encoder_output.shape})")
+        
         # Start Jetson monitoring
         jetson_monitor = JetsonMonitor()
         jetson_monitor.start()
         
         # Warmup
         print(f"Running {num_warmup} warmup iterations...")
+        
+        # Flag to track if warmup was successful
+        warmup_success = True
+        
         for _ in range(num_warmup):
-            encoder_outputs = encoder_session.run(encoder_output_names, {encoder_input_name: input_tensor})
-            encoder_output_dict = {name: output for name, output in zip(encoder_output_names, encoder_outputs)}
-            decoder_inputs = {name: encoder_output_dict.get(name) for name in decoder_input_names}
-            decoder_session.run(decoder_output_names, decoder_inputs)
+            try:
+                # Run encoder (reusing already mapped decoder_inputs from test run)
+                encoder_session.run(encoder_output_names, {encoder_input_name: input_tensor})
+                
+                # Run decoder with manually mapped inputs from test run
+                decoder_session.run(decoder_output_names, decoder_inputs)
+            except Exception as e:
+                print(f"  Error during warmup: {e}")
+                warmup_success = False
+                break
+        
+        if not warmup_success:
+            print(f"  Skipping {model_type} model benchmark due to warmup errors")
+            continue
         
         # Benchmark
         print(f"Running {num_iter} benchmark iterations...")
@@ -396,44 +446,30 @@ def run_inference(
             # Measure inference time
             start_time = time.time()
             
-            # Run encoder
-            encoder_outputs = encoder_session.run(encoder_output_names, {encoder_input_name: input_tensor})
-            encoder_output_dict = {name: output for name, output in zip(encoder_output_names, encoder_outputs)}
-            
-        # Prepare decoder inputs from encoder outputs
-        # Instead of direct name matching, we need to properly map encoder outputs to decoder inputs
-        # The encoder outputs are usually ordered, so we'll use the first output for the first input
-        decoder_inputs = {}
-        
-        # Debug info - print the actual names
-        if i == 0:  # Only print during first iteration
-            print(f"  Encoder output names: {encoder_output_names}")
-            print(f"  Decoder input names: {decoder_input_names}")
-        
-        # If there's no direct name match, use the ordered outputs
-        if len(encoder_output_names) > 0 and len(decoder_input_names) > 0:
-            # Simple ordered mapping - first encoder output to first decoder input
-            for idx, decoder_input_name in enumerate(decoder_input_names):
-                if idx < len(encoder_outputs):
-                    decoder_inputs[decoder_input_name] = encoder_outputs[idx]
-                else:
-                    print(f"  Warning: Not enough encoder outputs for decoder input: {decoder_input_name}")
-        
-        # Run decoder - check for None values first
-        if None in decoder_inputs.values():
-            print("  Error: Decoder inputs contain None values. Encoder and decoder models may be incompatible.")
-            print(f"  Decoder inputs: {decoder_inputs.keys()}")
-            break
-            
-        decoder_outputs = decoder_session.run(decoder_output_names, decoder_inputs)
-        
-        # Calculate latency
-        end_time = time.time()
-        latency = (end_time - start_time) * 1000  # ms
-        latencies.append(latency)
-        
-        if (i + 1) % 10 == 0:
-            print(f"  Iteration {i+1}/{num_iter}: {latency:.2f} ms")
+            try:
+                # Run encoder
+                encoder_outputs = encoder_session.run(encoder_output_names, {encoder_input_name: input_tensor})
+                
+                # Update decoder inputs with fresh encoder outputs
+                # This is needed to ensure we're using the current outputs
+                for idx, (input_name, output) in enumerate(zip(decoder_input_names, test_encoder_outputs)):
+                    if idx < len(encoder_outputs):
+                        decoder_inputs[input_name] = encoder_outputs[idx]
+                
+                # Run decoder with updated inputs
+                decoder_outputs = decoder_session.run(decoder_output_names, decoder_inputs)
+                
+                # Calculate latency
+                end_time = time.time()
+                latency = (end_time - start_time) * 1000  # ms
+                latencies.append(latency)
+                
+                if (i + 1) % 10 == 0:
+                    print(f"  Iteration {i+1}/{num_iter}: {latency:.2f} ms")
+            except Exception as e:
+                print(f"  Error during benchmark iteration {i+1}: {e}")
+                # Continue with next iteration
+                continue
         
         # Get Jetson hardware stats
         hw_stats = jetson_monitor.stop()
@@ -766,15 +802,20 @@ def run_comparison_inference(input_tensor, encoder, decoder, num_iter=10):
     
     # Run encoder
     encoder_outputs = encoder.run(encoder_output_names, {encoder_input_name: input_tensor})
-    encoder_output_dict = {name: output for name, output in zip(encoder_output_names, encoder_outputs)}
     
-    # Prepare decoder inputs from encoder outputs
-    decoder_inputs = {name: encoder_output_dict.get(name) for name in decoder_input_names}
+    # Create direct position-based mapping from encoder outputs to decoder inputs
+    decoder_inputs = {}
+    for idx, decoder_input_name in enumerate(decoder_input_names):
+        if idx < len(encoder_outputs):
+            decoder_inputs[decoder_input_name] = encoder_outputs[idx]
     
     # Run decoder
-    decoder_outputs = decoder.run(decoder_output_names, decoder_inputs)
-    
-    return decoder_outputs
+    try:
+        decoder_outputs = decoder.run(decoder_output_names, decoder_inputs)
+        return decoder_outputs
+    except Exception as e:
+        print(f"Error running decoder in comparison inference: {e}")
+        return None
 
 
 def generate_depth_visualization(results, input_image_path, output_dir, width=640, height=192):
@@ -809,14 +850,21 @@ def generate_depth_visualization(results, input_image_path, output_dir, width=64
         decoder_session = models[decoder_key]["session"]
         
         # Run inference
-        decoder_outputs = run_comparison_inference(input_tensor, encoder_session, decoder_session)
-        
-        # Extract disparity (assume first output is disparity)
-        disp = decoder_outputs[0]
-        
-        # Normalize for visualization
-        disp_resized = cv2.resize(disp[0, 0], (width, height))
-        disp_norm = (disp_resized - disp_resized.min()) / (disp_resized.max() - disp_resized.min())
+        try:
+            decoder_outputs = run_comparison_inference(input_tensor, encoder_session, decoder_session)
+            if decoder_outputs is None:
+                print(f"Skipping visualization for {model_type} model due to inference errors")
+                continue
+                
+            # Extract disparity (assume first output is disparity)
+            disp = decoder_outputs[0]
+            
+            # Normalize for visualization
+            disp_resized = cv2.resize(disp[0, 0], (width, height))
+            disp_norm = (disp_resized - disp_resized.min()) / (disp_resized.max() - disp_resized.min())
+        except Exception as e:
+            print(f"Error during visualization for {model_type} model: {e}")
+            continue
         
         # Create visualization
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
@@ -847,25 +895,38 @@ def generate_depth_visualization(results, input_image_path, output_dir, width=64
         ax1.set_title('Input Image')
         ax1.axis('off')
         
-        # Get the depth maps
-        orig_disp = run_comparison_inference(
-            input_tensor, 
-            models["encoder"]["session"],
-            models["decoder"]["session"]
-        )[0]
-        
-        quant_disp = run_comparison_inference(
-            input_tensor, 
-            models["encoder_quantized"]["session"],
-            models["decoder_quantized"]["session"]
-        )[0]
-        
-        # Normalize for visualization
-        orig_disp_resized = cv2.resize(orig_disp[0, 0], (width, height))
-        orig_disp_norm = (orig_disp_resized - orig_disp_resized.min()) / (orig_disp_resized.max() - orig_disp_resized.min())
-        
-        quant_disp_resized = cv2.resize(quant_disp[0, 0], (width, height))
-        quant_disp_norm = (quant_disp_resized - quant_disp_resized.min()) / (quant_disp_resized.max() - quant_disp_resized.min())
+        # Get the depth maps - handle potential errors
+        try:
+            orig_outputs = run_comparison_inference(
+                input_tensor, 
+                models["encoder"]["session"],
+                models["decoder"]["session"]
+            )
+            if orig_outputs is None:
+                print("Error generating original model depth map")
+                return vis_paths
+            
+            quant_outputs = run_comparison_inference(
+                input_tensor, 
+                models["encoder_quantized"]["session"],
+                models["decoder_quantized"]["session"]
+            )
+            if quant_outputs is None:
+                print("Error generating quantized model depth map")
+                return vis_paths
+                
+            orig_disp = orig_outputs[0]
+            quant_disp = quant_outputs[0]
+            
+            # Normalize for visualization
+            orig_disp_resized = cv2.resize(orig_disp[0, 0], (width, height))
+            orig_disp_norm = (orig_disp_resized - orig_disp_resized.min()) / (orig_disp_resized.max() - orig_disp_resized.min())
+            
+            quant_disp_resized = cv2.resize(quant_disp[0, 0], (width, height))
+            quant_disp_norm = (quant_disp_resized - quant_disp_resized.min()) / (quant_disp_resized.max() - quant_disp_resized.min())
+        except Exception as e:
+            print(f"Error during comparison visualization: {e}")
+            return vis_paths
         
         # Plot original depth
         depth_viz1 = ax2.imshow(orig_disp_norm, cmap='magma')
