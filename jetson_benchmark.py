@@ -476,48 +476,36 @@ def plot_results(results: Dict[str, Dict[str, Any]], output_dir: str) -> Dict[st
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     plot_paths = {}
     
-    # Check if we have both model types
-    if len(results) < 2:
-        print("Need both original and quantized models for comparison plots.")
-        return plot_paths
+    # Generate plots for available models (even if only one)
     
-    # Extract model types
     model_types = list(results.keys())
-    
-    # 1. Performance comparison plot (FPS and Latency)
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-    
     # FPS comparison
     fps_values = [results[model_type]["fps"] for model_type in model_types]
-    ax1.bar(model_types, fps_values, color=['tab:blue', 'tab:orange'])
+    ax1.bar(model_types, fps_values, color=['tab:blue', 'tab:orange'][:len(model_types)])
     ax1.set_title('FPS Comparison')
     ax1.set_ylabel('Frames Per Second')
     ax1.grid(True, alpha=0.3)
-    
-    # Add percentage improvement/degradation
+    # Add percentage improvement/degradation if both models
     if len(model_types) == 2:
         fps_change = ((results[model_types[1]]["fps"] - results[model_types[0]]["fps"]) / 
                        results[model_types[0]]["fps"] * 100)
         change_label = f"{fps_change:.1f}% {'improvement' if fps_change > 0 else 'degradation'}"
         ax1.text(0.5, 0.9, change_label, transform=ax1.transAxes, ha='center',
                  bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.7))
-    
     # Latency comparison
     latency_values = [results[model_type]["avg_latency_ms"] for model_type in model_types]
     latency_std = [results[model_type]["std_latency_ms"] for model_type in model_types]
-    ax2.bar(model_types, latency_values, yerr=latency_std, color=['tab:blue', 'tab:orange'])
+    ax2.bar(model_types, latency_values, yerr=latency_std, color=['tab:blue', 'tab:orange'][:len(model_types)])
     ax2.set_title('Inference Latency Comparison')
     ax2.set_ylabel('Latency (ms)')
     ax2.grid(True, alpha=0.3)
-    
-    # Add percentage improvement/degradation
     if len(model_types) == 2:
         latency_change = ((results[model_types[0]]["avg_latency_ms"] - results[model_types[1]]["avg_latency_ms"]) / 
                            results[model_types[0]]["avg_latency_ms"] * 100)
         change_label = f"{latency_change:.1f}% {'improvement' if latency_change > 0 else 'degradation'}"
         ax2.text(0.5, 0.9, change_label, transform=ax2.transAxes, ha='center',
                  bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.7))
-    
     fig.tight_layout()
     perf_plot_path = output_path / f"performance_comparison_{timestamp}.png"
     fig.savefig(perf_plot_path, dpi=150)
