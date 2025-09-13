@@ -761,11 +761,11 @@ def main():
         debug=args.debug
     )
     
-    if not results:
+    if not results or len(results) == 0:
         print("Benchmark failed. No results available.")
         return
     
-    # Write results to files
+    # Write results to files and always generate plots/visualizations if any results exist
     file_paths = write_results(results, args.results_dir)
     plot_paths = plot_results(results, args.results_dir)
     if plot_paths:
@@ -775,15 +775,7 @@ def main():
     print("\nResults saved to:")
     for file_type, path in file_paths.items():
         print(f"  {file_type}: {path}")
-    
-    # Generate plots
     if MATPLOTLIB_AVAILABLE:
-        plot_paths = plot_results(results, args.results_dir)
-        print("\nPlots saved to:")
-        for plot_type, path in plot_paths.items():
-            print(f"  {plot_type}: {path}")
-        
-        # Generate depth visualization
         vis_paths = generate_depth_visualization(
             results,
             args.image_path,
