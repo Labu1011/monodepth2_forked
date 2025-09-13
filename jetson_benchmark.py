@@ -397,17 +397,21 @@ def run_inference(
         for i, (name, output) in enumerate(zip(encoder_output_names, test_encoder_outputs)):
             print(f"    Output {i}: {name}, shape={output.shape}, dtype={output.dtype}")
         
-        # Create a direct ordered mapping regardless of names
-        # This attempts to map first encoder output to first decoder input, etc.
-        print("\nCreating direct mapping from encoder outputs to decoder inputs...")
+        # Map encoder outputs to decoder inputs by shape
+        print("\nMapping encoder outputs to decoder inputs by shape...")
         decoder_inputs = {}
-        
-        # Match by position
-        if len(encoder_output_names) > 0 and len(decoder_input_names) > 0:
-            for i, (decoder_name, encoder_output) in enumerate(zip(decoder_input_names, test_encoder_outputs)):
-                if i < len(test_encoder_outputs):
-                    decoder_inputs[decoder_name] = encoder_output
-                    print(f"  Mapped decoder input {decoder_name} <- encoder output {i} (shape={encoder_output.shape})")
+        encoder_output_dict = {name: output for name, output in zip(encoder_output_names, test_encoder_outputs)}
+        for decoder_input_name in decoder_input_names:
+            expected_shape = tuple(decoder_input_shapes[decoder_input_name])
+            found = False
+            for name, arr in encoder_output_dict.items():
+                if arr.shape == expected_shape:
+                    decoder_inputs[decoder_input_name] = arr
+                    print(f"  Mapped decoder input {decoder_input_name} <- encoder output {name} (shape={arr.shape})")
+                    found = True
+                    break
+            if not found:
+                print(f"  Warning: No encoder output matches shape for decoder input {decoder_input_name} (expected {expected_shape})")
         
         # Start Jetson monitoring
         jetson_monitor = JetsonMonitor()
@@ -419,12 +423,13 @@ def run_inference(
         # Flag to track if warmup was successful
         warmup_success = True
         
+        # Convert input tensor to float16 for quantized models
+        model_input_tensor = input_tensor
+        if model_type == "quantized":
+            model_input_tensor = model_input_tensor.astype(np.float16)
         for _ in range(num_warmup):
             try:
-                # Run encoder (reusing already mapped decoder_inputs from test run)
-                encoder_session.run(encoder_output_names, {encoder_input_name: input_tensor})
-                
-                # Run decoder with manually mapped inputs from test run
+                encoder_session.run(encoder_output_names, {encoder_input_name: model_input_tensor})
                 decoder_session.run(decoder_output_names, decoder_inputs)
             except Exception as e:
                 print(f"  Error during warmup: {e}")
@@ -440,35 +445,30 @@ def run_inference(
         latencies = []
         
         for i in range(num_iter):
-            # Sample Jetson stats
             jetson_monitor.sample()
-            
-            # Measure inference time
             start_time = time.time()
-            
             try:
-                # Run encoder
-                encoder_outputs = encoder_session.run(encoder_output_names, {encoder_input_name: input_tensor})
-                
-                # Update decoder inputs with fresh encoder outputs
-                # This is needed to ensure we're using the current outputs
-                for idx, (input_name, output) in enumerate(zip(decoder_input_names, test_encoder_outputs)):
-                    if idx < len(encoder_outputs):
-                        decoder_inputs[input_name] = encoder_outputs[idx]
-                
-                # Run decoder with updated inputs
+                encoder_outputs = encoder_session.run(encoder_output_names, {encoder_input_name: model_input_tensor})
+                encoder_output_dict = {name: output for name, output in zip(encoder_output_names, encoder_outputs)}
+                # Remap decoder inputs for each iteration
+                for decoder_input_name in decoder_input_names:
+                    expected_shape = tuple(decoder_input_shapes[decoder_input_name])
+                    found = False
+                    for name, arr in encoder_output_dict.items():
+                        if arr.shape == expected_shape:
+                            decoder_inputs[decoder_input_name] = arr
+                            found = True
+                            break
+                    if not found:
+                        print(f"  Warning: No encoder output matches shape for decoder input {decoder_input_name} (expected {expected_shape})")
                 decoder_outputs = decoder_session.run(decoder_output_names, decoder_inputs)
-                
-                # Calculate latency
                 end_time = time.time()
                 latency = (end_time - start_time) * 1000  # ms
                 latencies.append(latency)
-                
                 if (i + 1) % 10 == 0:
                     print(f"  Iteration {i+1}/{num_iter}: {latency:.2f} ms")
             except Exception as e:
                 print(f"  Error during benchmark iteration {i+1}: {e}")
-                # Continue with next iteration
                 continue
         
         # Get Jetson hardware stats
