@@ -792,16 +792,23 @@ def run_comparison_inference(input_tensor, encoder, decoder, num_iter=10):
     decoder_input_names = [inp.name for inp in decoder.get_inputs()]
     decoder_output_names = [output.name for output in decoder.get_outputs()]
     
-    # Run encoder
+    # Convert input to float16 for quantized model
+    if any('quant' in p.lower() for p in encoder.get_providers()):
+        input_tensor = input_tensor.astype(np.float16)
     encoder_outputs = encoder.run(encoder_output_names, {encoder_input_name: input_tensor})
-    
-    # Create direct position-based mapping from encoder outputs to decoder inputs
+    # Map encoder outputs to decoder inputs by shape
     decoder_inputs = {}
-    for idx, decoder_input_name in enumerate(decoder_input_names):
-        if idx < len(encoder_outputs):
-            decoder_inputs[decoder_input_name] = encoder_outputs[idx]
-    
-    # Run decoder
+    encoder_output_dict = {name: output for name, output in zip(encoder_output_names, encoder_outputs)}
+    for decoder_input_name in decoder_input_names:
+        expected_shape = decoder.get_inputs()[decoder_input_names.index(decoder_input_name)].shape
+        found = False
+        for name, arr in encoder_output_dict.items():
+            if tuple(arr.shape) == tuple(expected_shape):
+                decoder_inputs[decoder_input_name] = arr
+                found = True
+                break
+        if not found:
+            print(f"Warning: No encoder output matches shape for decoder input {decoder_input_name} (expected {expected_shape})")
     try:
         decoder_outputs = decoder.run(decoder_output_names, decoder_inputs)
         return decoder_outputs
