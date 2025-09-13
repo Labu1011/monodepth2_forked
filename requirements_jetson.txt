@@ -1,0 +1,19 @@
+# Requirements for Jetson TX2 Python 3.6 ONNX benchmark
+# Note: Some packages may require specific versions for Jetson compatibility
+
+# Core dependencies
+numpy>=1.16.0,<1.19.0  # Python 3.6 compatible range
+opencv-python>=4.1.1
+matplotlib>=3.0.3,<3.3.0  # Python 3.6 compatible
+
+# ONNX Runtime - install the right version for Jetson
+# For Jetson, you might need to build from source or use a wheel
+# Example: pip install onnxruntime-gpu==1.5.2
+onnxruntime==1.5.2  # Adjust version as needed for Jetson compatibility
+
+# Jetson-specific packages
+jetson-stats>=3.0.0  # For monitoring Jetson hardware
+
+# Optional utilities
+tqdm>=4.43.0,<4.50.0  # Progress bar
+Pillow>=7.0.0,<8.0.0  # Image processing
