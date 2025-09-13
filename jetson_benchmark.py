@@ -135,29 +135,33 @@ def parse_args():
 class JetsonMonitor:
     """Monitor Jetson Nano TX2 hardware metrics."""
     
-    def __init__(self):
-        self.available = JTOP_AVAILABLE
-        self.jetson = None
-        self.stats = []
-        
-    def start(self):
-        """Start monitoring."""
-        if not self.available:
-            return False
-        
-        try:
-            self.jetson = jtop.jtop()
-            self.jetson.start()
-            self.stats = []
-            return True
-        except Exception as e:
-            print(f"Error starting Jetson monitoring: {e}")
-            self.available = False
-            return False
-    
-    def sample(self):
-        """Sample current hardware stats."""
+    def stop(self):
+        """Stop monitoring and return stats."""
         if not self.available or self.jetson is None:
+            return {}
+        try:
+            self.jetson.close()
+            if len(self.stats) == 0:
+                return {}
+            # Only average numeric values, skip missing/malformed
+            def safe_mean(values):
+                vals = [v for v in values if isinstance(v, (int, float))]
+                return np.mean(vals) if vals else float('nan')
+
+            avg_stats = {
+                'gpu_util': safe_mean([s.get('gpu', 0) for s in self.stats]),
+                'gpu_freq': safe_mean([s.get('gpu_freq', 0) for s in self.stats]),
+                'ram_used': safe_mean([s.get('ram_used', 0) for s in self.stats]),
+                'ram_total': self.stats[0].get('ram_total', 0) if 'ram_total' in self.stats[0] else 0,
+                'gpu_temp': safe_mean([s.get('temp', {}).get('gpu', 0) for s in self.stats]),
+                'cpu_temp': safe_mean([s.get('temp', {}).get('cpu', 0) for s in self.stats]),
+                'power_mw': safe_mean([s.get('power', 0) for s in self.stats]),
+                'samples': len(self.stats),
+            }
+            return avg_stats
+        except Exception as e:
+            print(f"Error stopping Jetson monitoring: {e}")
+            return {}
             return
         
         try:
