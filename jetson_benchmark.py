@@ -391,6 +391,8 @@ def run_inference(
         # Try a test run to see the actual output
         print("\nRunning test inference to check actual output shapes...")
         test_input = input_tensor.copy()
+        if model_type == "quantized":
+            test_input = test_input.astype(np.float16)
         test_encoder_outputs = encoder_session.run(encoder_output_names, {encoder_input_name: test_input})
         
         print("  Actual encoder outputs:")
