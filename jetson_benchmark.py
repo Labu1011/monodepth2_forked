@@ -133,6 +133,46 @@ def parse_args():
 
 
 class JetsonMonitor:
+    def __init__(self):
+        self.available = JTOP_AVAILABLE
+        self.jetson = None
+        self.stats = []
+
+    def start(self):
+        """Start monitoring."""
+        if not self.available:
+            return False
+        try:
+            self.jetson = jtop.jtop()
+            self.jetson.start()
+            self.stats = []
+            return True
+        except Exception as e:
+            print(f"Error starting Jetson monitoring: {e}")
+            self.available = False
+            return False
+
+    def sample(self):
+        """Sample current hardware stats."""
+        if not self.available or self.jetson is None:
+            return
+        try:
+            if self.jetson.ok():
+                stats = {
+                    'timestamp': time.time(),
+                    'gpu': self.jetson.gpu.get('gpu', 0),  # GPU utilization %
+                    'gpu_freq': self.jetson.gpu.get('freq', 0),  # GPU frequency
+                    'ram_used': self.jetson.memory.get('used', 0),  # RAM used (MB)
+                    'ram_total': self.jetson.memory.get('total', 0),  # Total RAM (MB)
+                    'temp': {
+                        'gpu': self.jetson.temperature.get('GPU', 0),  # GPU temp
+                        'cpu': self.jetson.temperature.get('CPU', 0),  # CPU temp
+                    },
+                    'power': self.jetson.power.get('tot', 0),  # Total power (mW)
+                }
+                self.stats.append(stats)
+        except Exception as e:
+            print(f"Error sampling Jetson stats: {e}")
     """Monitor Jetson Nano TX2 hardware metrics."""
     
     def stop(self):
