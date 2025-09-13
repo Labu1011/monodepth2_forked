@@ -123,6 +123,12 @@ def parse_args():
         help="Use CUDA execution provider if available"
     )
     
+    parser.add_argument(
+        "--debug", 
+        action="store_true",
+        help="Enable debug output for model compatibility"
+    )
+    
     return parser.parse_args()
 
 
@@ -201,7 +207,7 @@ class JetsonMonitor:
             return {}
 
 
-def get_onnx_model_info(model_path: str) -> Dict[str, Any]:
+def get_onnx_model_info(model_path: str, debug: bool = False) -> Dict[str, Any]:
     """Get basic information about an ONNX model."""
     info = {
         'path': model_path,
@@ -220,10 +226,25 @@ def get_onnx_model_info(model_path: str) -> Dict[str, Any]:
         
         # Get input shapes
         info['input_shapes'] = {inp.name: inp.shape for inp in session.get_inputs()}
+        info['input_types'] = {inp.name: inp.type for inp in session.get_inputs()}
+        
+        # Get output shapes
+        info['output_shapes'] = {out.name: out.shape for out in session.get_outputs()}
+        info['output_types'] = {out.name: out.type for out in session.get_outputs()}
         
         # Model opset version
         model = ort.InferenceSession(model_path).get_modelmeta()
         info['opset_version'] = model.custom_metadata_map.get('onnx_opset_version', 'unknown')
+        
+        if debug:
+            print(f"Model: {model_path}")
+            print(f"  Input names: {info['input_names']}")
+            print(f"  Input shapes: {info['input_shapes']}")
+            print(f"  Input types: {info['input_types']}")
+            print(f"  Output names: {info['output_names']}")
+            print(f"  Output shapes: {info['output_shapes']}")
+            print(f"  Output types: {info['output_types']}")
+            print(f"  Opset version: {info['opset_version']}")
         
         return info
     except Exception as e:
@@ -255,7 +276,7 @@ def preprocess_image(image_path: str, target_width: int, target_height: int) -> 
     return img_batch
 
 
-def load_and_prepare_models(model_dir: str, use_cuda: bool) -> Dict[str, Dict[str, Any]]:
+def load_and_prepare_models(model_dir: str, use_cuda: bool, debug: bool = False) -> Dict[str, Dict[str, Any]]:
     """Load original and quantized encoder and decoder models."""
     models = {}
     
@@ -299,7 +320,7 @@ def load_and_prepare_models(model_dir: str, use_cuda: bool) -> Dict[str, Dict[st
         if exists:
             try:
                 # Get model info
-                model_info = get_onnx_model_info(path)
+                model_info = get_onnx_model_info(path, debug)
                 
                 # Create session
                 sess_options = ort.SessionOptions()
@@ -325,7 +346,8 @@ def run_inference(
     models: Dict[str, Dict[str, Any]],
     input_tensor: np.ndarray,
     num_warmup: int = 5,
-    num_iter: int = 50
+    num_iter: int = 50,
+    debug: bool = False
 ) -> Dict[str, Dict[str, Any]]:
     """Run inference benchmarks on original and quantized models."""
     results = {}
@@ -378,19 +400,40 @@ def run_inference(
             encoder_outputs = encoder_session.run(encoder_output_names, {encoder_input_name: input_tensor})
             encoder_output_dict = {name: output for name, output in zip(encoder_output_names, encoder_outputs)}
             
-            # Prepare decoder inputs from encoder outputs
-            decoder_inputs = {name: encoder_output_dict.get(name) for name in decoder_input_names}
+        # Prepare decoder inputs from encoder outputs
+        # Instead of direct name matching, we need to properly map encoder outputs to decoder inputs
+        # The encoder outputs are usually ordered, so we'll use the first output for the first input
+        decoder_inputs = {}
+        
+        # Debug info - print the actual names
+        if i == 0:  # Only print during first iteration
+            print(f"  Encoder output names: {encoder_output_names}")
+            print(f"  Decoder input names: {decoder_input_names}")
+        
+        # If there's no direct name match, use the ordered outputs
+        if len(encoder_output_names) > 0 and len(decoder_input_names) > 0:
+            # Simple ordered mapping - first encoder output to first decoder input
+            for idx, decoder_input_name in enumerate(decoder_input_names):
+                if idx < len(encoder_outputs):
+                    decoder_inputs[decoder_input_name] = encoder_outputs[idx]
+                else:
+                    print(f"  Warning: Not enough encoder outputs for decoder input: {decoder_input_name}")
+        
+        # Run decoder - check for None values first
+        if None in decoder_inputs.values():
+            print("  Error: Decoder inputs contain None values. Encoder and decoder models may be incompatible.")
+            print(f"  Decoder inputs: {decoder_inputs.keys()}")
+            break
             
-            # Run decoder
-            decoder_outputs = decoder_session.run(decoder_output_names, decoder_inputs)
-            
-            # Calculate latency
-            end_time = time.time()
-            latency = (end_time - start_time) * 1000  # ms
-            latencies.append(latency)
-            
-            if (i + 1) % 10 == 0:
-                print(f"  Iteration {i+1}/{num_iter}: {latency:.2f} ms")
+        decoder_outputs = decoder_session.run(decoder_output_names, decoder_inputs)
+        
+        # Calculate latency
+        end_time = time.time()
+        latency = (end_time - start_time) * 1000  # ms
+        latencies.append(latency)
+        
+        if (i + 1) % 10 == 0:
+            print(f"  Iteration {i+1}/{num_iter}: {latency:.2f} ms")
         
         # Get Jetson hardware stats
         hw_stats = jetson_monitor.stop()
@@ -888,10 +931,11 @@ def main():
     print(f"Target dimensions: {args.width}x{args.height}")
     print(f"Batch size: {args.batch_size}")
     print(f"Use CUDA: {args.use_cuda}")
+    print(f"Debug mode: {args.debug}")
     
     # Load models
     global models
-    models = load_and_prepare_models(args.model_path, args.use_cuda)
+    models = load_and_prepare_models(args.model_path, args.use_cuda, args.debug)
     
     if not models:
         print("No models found. Exiting.")
@@ -910,7 +954,8 @@ def main():
         models,
         input_tensor,
         num_warmup=args.num_warmup,
-        num_iter=args.num_iter
+        num_iter=args.num_iter,
+        debug=args.debug
     )
     
     if not results:
