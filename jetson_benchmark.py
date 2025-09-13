@@ -3,15 +3,13 @@
 Jetson Nano TX2 Inference Benchmark for Monodepth2 ONNX Models
 
 This script benchmarks original and quantized ONNX models on Jetson Nano TX2,
-measuring performance metrics like FPS, latency, GPU and memory usage, and
-visualizing the results for comparison.
+measuring performance metrics like FPS, latency, and visualizing the results for comparison.
 
 Requirements (Python 3.6):
 - onnxruntime
 - numpy
 - opencv-python
 - matplotlib
-- jetson-stats (for Jetson-specific GPU/memory monitoring)
 
 Note: This script is specifically designed for Jetson Nano TX2 with Python 3.6.
 """
@@ -28,13 +26,6 @@ from typing import Dict, List, Tuple, Any, Optional, Union
 import numpy as np
 import cv2
 
-# Conditional imports for Jetson-specific monitoring
-try:
-    import jtop  # jetson-stats package for Jetson monitoring
-    JTOP_AVAILABLE = True
-except ImportError:
-    JTOP_AVAILABLE = False
-    print("Warning: jetson-stats not available. Install with: pip install jetson-stats")
 
 # ONNX Runtime
 try:
@@ -533,106 +524,6 @@ def plot_results(results: Dict[str, Dict[str, Any]], output_dir: str) -> Dict[st
     plt.close(fig)
     plot_paths["performance"] = str(perf_plot_path)
     
-    # 2. Jetson RAM usage comparison
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ram_used = []
-    for model_type in model_types:
-        stats = results[model_type].get("jetson_stats", {})
-        ram_used.append(stats.get("ram_used", float('nan')))
-    x = np.arange(len(model_types))
-    width = 0.35
-    ax.bar(x, ram_used, width, color=['tab:blue', 'tab:orange'])
-    ax.set_ylabel('RAM Usage (MB)')
-    ax.set_title('Jetson RAM Usage Comparison')
-    ax.set_xticks(x)
-    ax.set_xticklabels([t.capitalize() for t in model_types])
-    ax.grid(True, alpha=0.3)
-    if len(model_types) == 2 and all(not np.isnan(val) for val in ram_used):
-        ram_change = ((ram_used[1] - ram_used[0]) / ram_used[0] * 100) if ram_used[0] else 0
-        change_label = f"{ram_change:+.1f}% RAM change"
-        ax.text(0.5, 0.9, change_label, transform=ax.transAxes, ha='center',
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.7))
-    ram_plot_path = output_path / f"jetson_ram_comparison_{timestamp}.png"
-    fig.tight_layout()
-    fig.savefig(ram_plot_path, dpi=150)
-    plt.close(fig)
-    plot_paths["ram"] = str(ram_plot_path)
-    
-    # 3. Jetson hardware metrics comparison (if available)
-    has_jetson_stats = all("jetson_stats" in model_results and model_results["jetson_stats"] 
-                          for model_results in results.values())
-    
-    if has_jetson_stats:
-        # Plot GPU utilization, RAM usage, and power
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
-        
-        # GPU utilization
-        gpu_util = [results[model_type]["jetson_stats"]["gpu_util"] for model_type in model_types]
-        ax1.bar(model_types, gpu_util, color=['tab:blue', 'tab:orange'])
-        ax1.set_title('GPU Utilization')
-        ax1.set_ylabel('Utilization (%)')
-        ax1.grid(True, alpha=0.3)
-        
-        # RAM usage
-        ram_used = [results[model_type]["jetson_stats"]["ram_used"] for model_type in model_types]
-        ax2.bar(model_types, ram_used, color=['tab:blue', 'tab:orange'])
-        ax2.set_title('RAM Usage')
-        ax2.set_ylabel('Usage (MB)')
-        ax2.grid(True, alpha=0.3)
-        
-        # Power consumption
-        power = [results[model_type]["jetson_stats"]["power_mw"] for model_type in model_types]
-        ax3.bar(model_types, power, color=['tab:blue', 'tab:orange'])
-        ax3.set_title('Power Consumption')
-        ax3.set_ylabel('Power (mW)')
-        ax3.grid(True, alpha=0.3)
-        
-        fig.tight_layout()
-        hw_plot_path = output_path / f"jetson_hardware_metrics_{timestamp}.png"
-        fig.savefig(hw_plot_path, dpi=150)
-        plt.close(fig)
-        plot_paths["hardware"] = str(hw_plot_path)
-    
-    # 4. Combined summary plot
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
-    # FPS
-    ax1.bar(model_types, fps_values, color=['tab:blue', 'tab:orange'])
-    ax1.set_title('FPS')
-    ax1.set_ylabel('Frames Per Second')
-    ax1.grid(True, alpha=0.3)
-    # Latency
-    ax2.bar(model_types, latency_values, yerr=latency_std, color=['tab:blue', 'tab:orange'])
-    ax2.set_title('Latency (ms)')
-    ax2.set_ylabel('Milliseconds')
-    ax2.grid(True, alpha=0.3)
-    # Jetson RAM Usage
-    ax3.bar(model_types, ram_used, color=['tab:blue', 'tab:orange'])
-    ax3.set_title('Jetson RAM Usage (MB)')
-    ax3.set_ylabel('Megabytes')
-    ax3.grid(True, alpha=0.3)
-    # GPU Utilization
-    if has_jetson_stats:
-        gpu_util = [results[model_type]["jetson_stats"].get("gpu_util", float('nan')) for model_type in model_types]
-        if all(not np.isnan(val) for val in gpu_util):
-            ax4.bar(model_types, gpu_util, color=['tab:blue', 'tab:orange'])
-            ax4.set_title('GPU Utilization (%)')
-            ax4.set_ylabel('Percentage')
-        else:
-            ax4.text(0.5, 0.5, 'Jetson GPU stats not available', 
-                     ha='center', va='center', transform=ax4.transAxes)
-            ax4.set_title('GPU Utilization')
-    else:
-        ax4.text(0.5, 0.5, 'Jetson stats not available', 
-                 ha='center', va='center', transform=ax4.transAxes)
-        ax4.set_title('GPU Utilization')
-    ax4.grid(True, alpha=0.3)
-    fig.suptitle('Monodepth2 ONNX Models Benchmark Summary', fontsize=16)
-    fig.tight_layout()
-    fig.subplots_adjust(top=0.94)
-    summary_plot_path = output_path / f"benchmark_summary_{timestamp}.png"
-    fig.savefig(summary_plot_path, dpi=150)
-    plt.close(fig)
-    plot_paths["summary"] = str(summary_plot_path)
     
     return plot_paths
 
@@ -876,6 +767,11 @@ def main():
     
     # Write results to files
     file_paths = write_results(results, args.results_dir)
+    plot_paths = plot_results(results, args.results_dir)
+    if plot_paths:
+        print("Plots generated:")
+        for k, v in plot_paths.items():
+            print(f"  {k}: {v}")
     print("\nResults saved to:")
     for file_type, path in file_paths.items():
         print(f"  {file_type}: {path}")
