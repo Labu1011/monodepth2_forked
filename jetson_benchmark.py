@@ -121,6 +121,11 @@ def parse_args():
         "--use_cuda", 
         action="store_true"
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug output for model compatibility"
+    )
     return parser.parse_args()
 
 # JetsonMonitor class definition moved outside of parse_args
@@ -189,21 +194,6 @@ class JetsonMonitor:
                 'power_mw': safe_mean([s.get('power', 0) for s in self.stats]),
                 'samples': len(self.stats),
             }
-            return avg_stats
-        except Exception as e:
-            print(f"Error stopping Jetson monitoring: {e}")
-            return {}
-            avg_stats = {
-                'gpu_util': np.mean([s['gpu'] for s in self.stats]),
-                'gpu_freq': np.mean([s['gpu_freq'] for s in self.stats]),
-                'ram_used': np.mean([s['ram_used'] for s in self.stats]),
-                'ram_total': self.stats[0]['ram_total'],  # Total RAM shouldn't change
-                'gpu_temp': np.mean([s['temp']['gpu'] for s in self.stats]),
-                'cpu_temp': np.mean([s['temp']['cpu'] for s in self.stats]),
-                'power_mw': np.mean([s['power'] for s in self.stats]),
-                'samples': len(self.stats),
-            }
-            
             return avg_stats
         except Exception as e:
             print(f"Error stopping Jetson monitoring: {e}")
